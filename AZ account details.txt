@@ -1,0 +1,16 @@
+{
+  "environmentName": "AzureCloud",
+  "homeTenantId": "7b574289-2e65-4d67-8398-6876f54cce53",
+  "id": "c02db223-ae2a-4677-943f-e5864c5361a3",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "payasyougo",
+  "state": "Enabled",
+  "tenantDefaultDomain": "atharavdeshmukhnl41gmail.onmicrosoft.com",
+  "tenantDisplayName": "Default Directory",
+  "tenantId": "7b574289-2e65-4d67-8398-6876f54cce53",
+  "user": {
+    "name": "atharavdeshmukhnl41@gmail.com",
+    "type": "user"
+  }
+}
