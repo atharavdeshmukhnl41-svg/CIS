@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cloud Intelligence Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+ 
+<h1>Cloud Intelligence Dashboard</h1>
+ 
+<div class="card">
+    <h2>VM RCA</h2>
+    <input type="text" id="vmName" placeholder="VM Name (e.g. CIP)">
+    <input type="number" id="vmPort" placeholder="Port (e.g. 22)">
+    <button onclick="getVMRCA()">Check VM</button>
+    <pre id="vmResult"></pre>
+</div>
+ 
+<div class="card">
+    <h2>Application RCA</h2>
+    <input type="text" id="appName" placeholder="App Name (e.g. my-app)">
+    <input type="number" id="appPort" placeholder="Port (e.g. 80)">
+    <button onclick="getAppRCA()">Check App</button>
+    <pre id="appResult"></pre>
+</div>
+ 
+<div class="card">
+    <h2>Metrics</h2>
+    <input type="text" id="metricVM" placeholder="VM Name (e.g. CIP)">
+    <button onclick="getMetrics()">Get Metrics</button>
+    <pre id="metricResult"></pre>
+</div>
+ 
+<script src="app.js"></script>
+ 
+</body>
+</html>

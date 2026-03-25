@@ -1,4 +1,6 @@
 azure-identity
 azure-mgmt-compute
 azure-mgmt-network
-neoj4
+azure-mgmt-monitor
+azure-mgmt-resource
+neo4j

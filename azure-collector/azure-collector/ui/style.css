@@ -1,0 +1,36 @@
+body {
+    font-family: Arial;
+    background: #0f172a;
+    color: white;
+    padding: 20px;
+}
+ 
+h1 {
+    text-align: center;
+}
+ 
+.card {
+    background: #1e293b;
+    padding: 20px;
+    margin: 20px;
+    border-radius: 10px;
+}
+ 
+input {
+    padding: 8px;
+    margin: 5px;
+}
+ 
+button {
+    padding: 8px 12px;
+    background: #22c55e;
+    border: none;
+    cursor: pointer;
+}
+ 
+pre {
+    background: black;
+    padding: 10px;
+    margin-top: 10px;
+    overflow-x: auto;
+}
