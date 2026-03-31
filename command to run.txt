@@ -1,0 +1,158 @@
+Load APIS 
+uvicorn api.main:app --host 0.0.0.0 --port 9000 --reload
+
+cip agent creation
+
+/home/CIP/cip/cip_agent.py
+
+import time
+import psutil
+import requests
+ 
+# 🔥 IMPORTANT: Replace with your actual ngrok URL
+API_URL = "https://YOUR_NGROK_URL/agent/metrics"
+ 
+def collect_metrics():
+    return {
+        "vm": "CIP",
+        "cpu": psutil.cpu_percent(interval=1),
+        "network_in": psutil.net_io_counters().bytes_recv,
+        "network_out": psutil.net_io_counters().bytes_sent
+    }
+ 
+def send_metrics(data):
+    try:
+        response = requests.post(API_URL, json=data, timeout=5)
+        print("Sent:", data, "Status:", response.status_code)
+    except Exception as e:
+        print("Error:", e)
+ 
+def main():
+    while True:
+        data = collect_metrics()
+        send_metrics(data)
+        time.sleep(5)
+ 
+if __name__ == "__main__":
+    main()
+
+/etc/systemcd/system/cip.service
+[Unit]
+Description=CIP Monitoring Agent
+After=network.target
+ 
+[Service]
+User=CIP
+WorkingDirectory=/home/CIP/cip
+ExecStart=/home/CIP/cip-env/bin/python /home/CIP/cip/cip_agent.py
+Restart=always
+RestartSec=5
+ 
+[Install]
+WantedBy=multi-user.target
+
+also use home/CIP/install.sh
+
+#!/bin/bash
+ 
+echo "🚀 Installing CIP Monitoring Agent..."
+ 
+# -------------------------------
+# STEP 1: Update system
+# -------------------------------
+sudo apt update -y
+ 
+# -------------------------------
+# STEP 2: Install Python & pip
+# -------------------------------
+sudo apt install -y python3 python3-pip python3-venv
+ 
+# -------------------------------
+# STEP 3: Create directories
+# -------------------------------
+mkdir -p /home/CIP/cip
+cd /home/CIP
+ 
+# -------------------------------
+# STEP 4: Create virtual environment
+# -------------------------------
+python3 -m venv cip-env
+ 
+# Activate venv
+source cip-env/bin/activate
+ 
+# -------------------------------
+# STEP 5: Install dependencies
+# -------------------------------
+pip install psutil requests
+ 
+# -------------------------------
+# STEP 6: Create agent file
+# -------------------------------
+cat <<EOF > /home/CIP/cip/cip_agent.py
+import time
+import psutil
+import requests
+ 
+API_URL = "https://REPLACE_WITH_NGROK_URL/agent/metrics"
+ 
+def collect_metrics():
+    return {
+        "vm": "CIP",
+        "cpu": psutil.cpu_percent(interval=1),
+        "network_in": psutil.net_io_counters().bytes_recv,
+        "network_out": psutil.net_io_counters().bytes_sent
+    }
+ 
+def send_metrics(data):
+    try:
+        response = requests.post(API_URL, json=data, timeout=5)
+        print("Sent:", data, "Status:", response.status_code)
+    except Exception as e:
+        print("Error:", e)
+ 
+def main():
+    while True:
+        data = collect_metrics()
+        send_metrics(data)
+        time.sleep(5)
+ 
+if __name__ == "__main__":
+    main()
+EOF
+ 
+# -------------------------------
+# STEP 7: Create systemd service
+# -------------------------------
+sudo bash -c 'cat <<EOF > /etc/systemd/system/cip.service
+[Unit]
+Description=CIP Monitoring Agent
+After=network.target
+ 
+[Service]
+User=CIP
+WorkingDirectory=/home/CIP/cip
+ExecStart=/home/CIP/cip-env/bin/python /home/CIP/cip/cip_agent.py
+Restart=always
+RestartSec=5
+ 
+[Install]
+WantedBy=multi-user.target
+EOF'
+ 
+# -------------------------------
+# STEP 8: Reload systemd
+# -------------------------------
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+ 
+# -------------------------------
+# STEP 9: Enable & start service
+# -------------------------------
+sudo systemctl enable cip
+sudo systemctl start cip
+ 
+echo "✅ CIP Agent Installed Successfully!"
+echo "👉 Now update NGROK URL inside:"
+echo "/home/CIP/cip/cip_agent.py"
+

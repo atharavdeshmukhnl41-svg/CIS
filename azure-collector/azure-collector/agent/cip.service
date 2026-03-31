@@ -1,0 +1,11 @@
+[Unit]
+Description=CIP Monitoring Agent
+After=network.target
+ 
+[Service]
+ExecStart=/usr/bin/python3 /home/azureuser/cip/cip_agent.py
+Restart=always
+User=azureuser
+ 
+[Install]
+WantedBy=multi-user.target

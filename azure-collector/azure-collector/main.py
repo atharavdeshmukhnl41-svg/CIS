@@ -3,7 +3,7 @@ from app.topology_builder import TopologyBuilder
 from app.graph_loader import GraphLoader
 from app.azure_db_fetcher import AzureDBFetcher
 from app.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
- 
+
  
 def main():
  

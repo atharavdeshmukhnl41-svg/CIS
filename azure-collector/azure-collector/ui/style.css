@@ -1,36 +1,39 @@
 body {
-    font-family: Arial;
     background: #0f172a;
     color: white;
-    padding: 20px;
+    font-family: Arial;
 }
  
 h1 {
     text-align: center;
+    color: #22c55e;
 }
  
 .card {
     background: #1e293b;
     padding: 20px;
     margin: 20px;
-    border-radius: 10px;
-}
- 
-input {
-    padding: 8px;
-    margin: 5px;
+    border-radius: 12px;
 }
  
 button {
-    padding: 8px 12px;
     background: #22c55e;
     border: none;
+    padding: 10px;
     cursor: pointer;
+}
+
+#graph {
+    height: 500px;
+    background: #020617;
+    border: 2px solid #22c55e;
+    border-radius: 10px;
 }
  
 pre {
-    background: black;
+    text-align: left;
+    background: #020617;
     padding: 10px;
-    margin-top: 10px;
+    border-radius: 8px;
     overflow-x: auto;
 }

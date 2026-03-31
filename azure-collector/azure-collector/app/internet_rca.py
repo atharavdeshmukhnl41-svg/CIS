@@ -13,7 +13,7 @@ class InternetRCA:
     def check_public_access(self, vm_name):
         query = """
         MATCH (vm:VM {name:$vm_name})-[:HAS_NIC]->(nic)
-        OPTIONAL MATCH (pip:PublicIP)-[:ATTACHED_TO]->(nic)
+        OPTIONAL MATCH (pip:PublicIP)-[:SECURED_BY]->(nic)
         RETURN pip
         """
 

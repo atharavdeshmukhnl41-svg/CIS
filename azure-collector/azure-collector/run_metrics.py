@@ -1,88 +1,41 @@
-from app.azure_metrics import AzureMetricsCollector
-
 from neo4j import GraphDatabase
-
-from app.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
-
+from app.metrics_fetcher import MetricsFetcher
  
-
+URI = "bolt://localhost:7687"
+USER = "neo4j"
+PASSWORD = "password"
+ 
+ 
 def main():
-
- 
-
     vm_name = input("Enter VM name: ")
-
  
-
-    collector = AzureMetricsCollector()
-
+    fetcher = MetricsFetcher()
+    metrics = fetcher.fetch(vm_name)
  
-
-    print(f"\nCollecting metrics for VM: {vm_name}")
-
+    print("\n===== METRICS =====")
+    print(metrics)
  
-
-    collector.collect_and_store(vm_name)
-
+    driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
  
-
-    print("\n===== METRICS =====\n")
-
- 
-
-    driver = GraphDatabase.driver(
-
-        NEO4J_URI,
-
-        auth=(NEO4J_USER, NEO4J_PASSWORD)
-
-    )
-
- 
-
     with driver.session() as session:
-
+        session.run("""
+        CREATE (m:Metrics {
+            vm: $vm,
+            cpu: $cpu,
+            network_in: $network_in,
+            network_out: $network_out,
+            timestamp: datetime()
+        })
+        """, {
+            "vm": vm_name,
+            "cpu": metrics["cpu"],
+            "network_in": metrics["network_in"],
+            "network_out": metrics["network_out"]
+        })
  
-
-        result = session.run("""
-
-        MATCH (vm:VM {name:$vm})-[:HAS_METRIC]->(m)
-
-        RETURN m.cpu AS cpu,
-
-               m.network_in AS net_in,
-
-               m.network_out AS net_out
-
-        """, vm=vm_name)
-
- 
-
-        record = result.single()
-
- 
-
-        if record:
-
-            print("CPU:", record["cpu"])
-
-            print("Network In:", record["net_in"])
-
-            print("Network Out:", record["net_out"])
-
-        else:
-
-            print("❌ No metrics found in DB")
-
- 
-
     driver.close()
-
+    print("✔ Metrics stored in Neo4j")
  
-
  
-
 if __name__ == "__main__":
-
     main()
-

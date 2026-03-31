@@ -57,5 +57,23 @@ class Neo4jLoader:
                     source=edge["source"],
                     target=edge["target"]
                 )
+    def insert_metrics(self, vm, cpu, net_in, net_out):
+    
+        query = """
+        CREATE (m:Metrics {
+            vm: $vm,
+            cpu: $cpu,
+            network_in: $net_in,
+            network_out: $net_out,
+            timestamp: datetime()
+        })
+        """
+    
+        self.execute(query, {
+            "vm": vm,
+            "cpu": cpu,
+            "net_in": net_in,
+            "net_out": net_out
+        })
 
         print("Loaded into Neo4j!")
