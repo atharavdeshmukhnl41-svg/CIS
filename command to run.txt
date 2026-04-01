@@ -1,6 +1,10 @@
 Load APIS 
 uvicorn api.main:app --host 0.0.0.0 --port 9000 --reload
 
+to load test cpu
+sudo apt install stress -y
+stress --cpu 4 --timeout 120
+
 cip agent creation
 
 /home/CIP/cip/cip_agent.py

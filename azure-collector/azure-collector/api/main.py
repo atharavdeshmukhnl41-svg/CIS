@@ -2,17 +2,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 from datetime import datetime, timezone
- 
+from app.incident_engine import IncidentEngine
 from app.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from app.rca_engine import RCAEngine
 from app.dependency_mapper import DependencyMapper
 from app.metrics_analyzer import MetricsAnalyzer
- 
+from app.approval_engine import ApprovalEngine
+from app.execution_engine import ExecutionEngine
 # =========================
 # INIT
 # =========================
 app = FastAPI()
- 
+approval_engine = ApprovalEngine()
+execution_engine = ExecutionEngine()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -229,3 +231,60 @@ def get_topology():
  
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/incident/global")
+def global_incident(port: int = 22):
+ 
+    engine = IncidentEngine()
+ 
+    # ✅ FIX 1: DISTINCT VM names
+    query = "MATCH (v:VM) RETURN DISTINCT v.name AS name"
+ 
+    with driver.session() as session:
+        results = session.run(query).data()
+ 
+    # ✅ FIX 2: Remove None / duplicates safely
+    vms = list(set([r["name"] for r in results if r.get("name")]))
+ 
+    incidents = engine.analyze_infrastructure(vms, port)
+ 
+    return {"incidents": incidents}
+
+@app.get("/incident/global")
+def global_incident(port: int):
+    engine = IncidentEngine()
+ 
+    vms = ["CIP", "VM1", "VM2", "VM3", "VM4"]
+ 
+    incidents = engine.analyze_infrastructure(vms, port)
+ 
+    return {"incidents": incidents}
+
+@app.post("/approval/request")
+def create_request(data: dict):
+ 
+    action = data.get("action")
+    vm = data.get("vm")
+    port = data.get("port")
+ 
+    req = approval_engine.create_request(action, vm, port)
+ 
+    return req
+
+@app.get("/approval/list")
+def list_requests():
+    return {"requests": approval_engine.list_requests()}
+
+@app.post("/approval/approve")
+def approve_request(data: dict):
+ 
+    req_id = data.get("id")
+    approver = data.get("approver", "admin")
+ 
+    result = approval_engine.approve(
+        req_id,
+        approver,
+        execution_engine
+    )
+ 
+    return result

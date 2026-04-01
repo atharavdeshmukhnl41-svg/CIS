@@ -1,174 +1,277 @@
 const API = "http://127.0.0.1:9000";
+
  
-function formatOutput(data) {
-    return JSON.stringify(data, null, 2);
+
+// ---------------- KPI ----------------
+
+async function updateKPIs(vm) {
+
+  try {
+
+    const res = await fetch(`${API}/metrics?vm=${vm}`);
+
+    const data = await res.json();
+
+ 
+
+    document.getElementById("cpuCard").innerText = "CPU: " + data.cpu;
+
+    document.getElementById("netCard").innerText =
+
+      "Network: " + (data.network_in + data.network_out);
+
+    document.getElementById("statusCard").innerText =
+
+      "Status: " + data.status;
+
+ 
+
+  } catch (e) {
+
+    console.log("KPI error:", e);
+
+  }
+
 }
+
  
-// ==========================
-// VM RCA
-// ==========================
-async function checkVM() {
-    const nameEl = document.getElementById("vmName");
-    const portEl = document.getElementById("vmPort");
-    const output = document.getElementById("vmResult");
+
+// ---------------- RCA ----------------
+
+async function runRCA() {
+
+  const vm = document.getElementById("vmName").value;
+
+  const port = document.getElementById("port").value;
+
  
-    if (!nameEl || !portEl || !output) return;
+
+  try {
+
+    const res = await fetch(`${API}/rca/vm?name=${vm}&port=${port}`);
+
+    const data = await res.json();
+
  
-    const name = nameEl.value;
-    const port = portEl.value || 22;
+
+    document.getElementById("rcaOutput").innerText =
+
+      JSON.stringify(data, null, 2);
+
  
-    output.innerText = "Loading...";
+
+    updateKPIs(vm);
+
  
-    if (!name) {
-        output.innerText = "❌ VM name required";
-        return;
-    }
- 
-    try {
-        const res = await fetch(`${API}/rca/vm?name=${name}&port=${port}`);
-        const data = await res.json();
- 
-        output.innerText = formatOutput(data);
-        window.lastManualVMCheck = Date.now();
- 
-    } catch (err) {
-        output.innerText = "❌ Error: " + err;
-    }
+
+  } catch (e) {
+
+    document.getElementById("rcaOutput").innerText = "Error";
+
+  }
+
 }
+
  
-// ==========================
-// APPLICATION RCA
-// ==========================
-async function checkApp() {
-    const nameEl = document.getElementById("appName");
-    const portEl = document.getElementById("appPort");
-    const output = document.getElementById("appResult");
+
+// ---------------- INCIDENT ----------------
+
+async function loadIncidents() {
+
+  const port = document.getElementById("port").value || 22;
+
  
-    if (!nameEl || !portEl || !output) return;
+
+  try {
+
+    const res = await fetch(`${API}/incident/global?port=${port}`);
+
+    const data = await res.json();
+
  
-    const name = nameEl.value;
-    const port = portEl.value || 22;
+
+    document.getElementById("incidentOutput").innerText =
+
+      JSON.stringify(data, null, 2);
+
  
-    output.innerText = "Loading...";
- 
-    if (!name) {
-        output.innerText = "❌ App name required";
-        return;
-    }
- 
-    try {
-        const res = await fetch(`${API}/rca/app?name=${name}&port=${port}`);
-        const data = await res.json();
- 
-        output.innerText = formatOutput(data);
- 
-    } catch (err) {
-        output.innerText = "❌ Error: " + err;
-    }
+
+  } catch (e) {
+
+    console.log("Incident error:", e);
+
+  }
+
 }
+
  
-// ==========================
-// METRICS
-// ==========================
-async function getMetrics() {
-    const vmEl = document.getElementById("metricsVm");
-    const output = document.getElementById("metricsResult");
- 
-    if (!vmEl || !output) return;
- 
-    const vm = vmEl.value;
- 
-    output.innerText = "Loading...";
- 
-    if (!vm) {
-        output.innerText = "❌ VM required";
-        return;
-    }
- 
-    try {
-        const res = await fetch(`${API}/metrics?vm=${vm}`);
-        const data = await res.json();
- 
-        output.innerText = formatOutput(data);
- 
-    } catch (err) {
-        output.innerText = "❌ Error: " + err;
-    }
-}
- 
-// ==========================
-// ALERTS
-// ==========================
+
+// ---------------- ALERT ----------------
+
 async function loadAlerts() {
-    const vmEl = document.getElementById("alertVM");
-    const output = document.getElementById("alertResult");
+
+  const vm = document.getElementById("vmName").value;
+
  
-    if (!vmEl || !output) return;
+
+  try {
+
+    const res = await fetch(`${API}/alerts?vm=${vm}`);
+
+    const data = await res.json();
+
  
-    const vm = vmEl.value;
+
+    document.getElementById("alertOutput").innerText =
+
+      JSON.stringify(data, null, 2);
+
  
-    output.innerText = "Loading...";
+
+  } catch (e) {
+
+    console.log("Alert error:", e);
+
+  }
+
+}
+
  
-    if (!vm) {
-        output.innerText = "❌ VM required";
-        return;
-    }
+
+// ---------------- TOPOLOGY ----------------
+
+async function loadTopology() {
+
+  try {
+
+    const res = await fetch(`${API}/topology`);
+
+    const data = await res.json();
+
  
-    try {
-        const res = await fetch(`${API}/alerts?vm=${vm}`);
-        const data = await res.json();
+
+    console.log("Topology data:", data);
+
  
-        output.innerText = formatOutput(data);
+
+    renderGraph(data.nodes, data.edges);
+
  
-    } catch (err) {
-        output.innerText = "❌ Error: " + err;
-    }
+
+  } catch (e) {
+
+    console.log("Topology error:", e);
+
+  }
+
+}
+
+ 
+
+// ---------------- AUTO REFRESH ----------------
+
+setInterval(() => {
+
+  const vm = document.getElementById("vmName").value;
+
+  if (vm) updateKPIs(vm);
+
+}, 5000);
+
+// -------------------------
+// CREATE APPROVAL REQUEST
+// -------------------------
+async function requestFix(action) {
+ 
+const vm = document.getElementById("vmName").value.trim();
+const port = document.getElementById("port").value.trim();
+ 
+// ✅ VALIDATION (CRITICAL FIX)
+if (!vm) {
+  alert("VM name is required");
+  return;
 }
  
-// ==========================
-// AUTO REFRESH (SAFE)
-// ==========================
-function startAutoRefresh() {
-  setInterval(async () => {
-    const vm = document.getElementById("vmName").value;
-    if (!vm) return;
- 
-    try {
-      // 🔥 ALWAYS CALL METRICS FIRST (FOR FRESH STATE)
-      const mRes = await fetch(`${API}/metrics?vm=${vm}`);
-      const mData = await mRes.json();
- 
-      document.getElementById("metricsResult").innerText =
-        JSON.stringify(mData, null, 2);
- 
-      // ===== ALERTS =====
-      const aRes = await fetch(`${API}/alerts?vm=${vm}`);
-      const aData = await aRes.json();
- 
-      document.getElementById("alertResult").innerText =
-        JSON.stringify(aData, null, 2);
- 
-      // ===== RCA =====
-      const port = document.getElementById("port").value || 22;
- 
-      const rcaRes = await fetch(
-        `${API}/rca/vm?name=${vm}&port=${port}`
-      );
-      const rcaData = await rcaRes.json();
- 
-      document.getElementById("vmResult").innerText =
-        JSON.stringify(rcaData, null, 2);
- 
-    } catch (err) {
-      console.log("Auto refresh error:", err);
-    }
- 
-  }, 5000); // 🔥 reduce to 5 sec
+if (action === "fix_nsg" && !port) {
+  alert("Port is required for NSG fix");
+  return;
 }
  
-// ==========================
-// INIT (CRITICAL FIX)
-// ==========================
-document.addEventListener("DOMContentLoaded", function () {
-    startAutoRefresh();
+const res = await fetch(`${API}/approval/request`, {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({ action, vm, port })
 });
+ 
+const data = await res.json();
+ 
+alert("Request Created: " + data.id);
+ 
+loadApprovals();
+}
+ 
+// -------------------------
+// LOAD REQUESTS
+// -------------------------
+async function loadApprovals() {
+ 
+  const res = await fetch(`${API}/approval/list`);
+  const data = await res.json();
+ 
+  document.getElementById("approvalOutput").innerText =
+    JSON.stringify(data, null, 2);
+}
+ 
+// -------------------------
+// APPROVE REQUEST
+// -------------------------
+async function approveRequest() {
+ 
+const id = document.getElementById("approvalId").value.trim();
+ 
+if (!id) {
+  alert("Approval ID required");
+  return;
+}
+ 
+const res = await fetch(`${API}/approval/approve`, {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({ id: id })
+});
+ 
+const data = await res.json();
+ 
+alert("Approved: " + data.status);
+ 
+loadApprovals();
+}
+
+async function runRCA() {
+ 
+const vm = document.getElementById("vmName").value.trim();
+const port = document.getElementById("port").value.trim();
+ 
+if (!vm) {
+  alert("Enter VM name");
+  return;
+}
+ 
+if (!port) {
+  alert("Enter port");
+  return;
+}
+ 
+try {
+  const res = await fetch(`${API}/rca/vm?name=${vm}&port=${port}`);
+  const data = await res.json();
+ 
+  document.getElementById("rcaOutput").innerText =
+   JSON.stringify(data, null, 2);
+ 
+  updateKPIs(vm);
+ 
+} catch (e) {
+  document.getElementById("rcaOutput").innerText = "Error";
+}
+}

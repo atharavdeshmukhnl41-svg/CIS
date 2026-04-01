@@ -1,57 +1,81 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Cloud Intelligence Dashboard</title>
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-<link rel="stylesheet" href="style.css">
+  <title>CIP Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+ 
+  <!-- ✅ REQUIRED FOR GRAPH -->
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
+ 
 <body>
  
-<h1>Cloud Intelligence Dashboard</h1>
- 
-<!-- VM RCA -->
-<div class="card">
-<h2>VM RCA</h2>
-<input id="vmName" placeholder="VM Name">
-<input id="vmPort" placeholder="Port"> <!-- ✅ FIXED -->
-<button onclick="checkVM()">Check VM</button>
-<pre id="vmResult"></pre>
+<div class="header">
+  <h1>🚀 Cloud Intelligence Platform</h1>
 </div>
  
-<!-- Application RCA -->
-<div class="card">
-<h2>Application RCA</h2>
-<input id="appName" placeholder="App Name">
-<input id="appPort" placeholder="Port">
-<button onclick="checkApp()">Check App</button> <!-- ✅ FIXED -->
-<pre id="appResult"></pre>
+<!-- KPI -->
+<div class="kpi-container">
+  <div class="kpi" id="cpuCard">CPU: --</div>
+  <div class="kpi" id="netCard">Network: --</div>
+  <div class="kpi" id="statusCard">Status: --</div>
 </div>
  
-<!-- Metrics -->
-<div class="card">
-<h2>Metrics</h2>
-<input id="metricsVm" placeholder="VM Name"> <!-- ✅ FIXED -->
-<button onclick="getMetrics()">Get Metrics</button>
-<pre id="metricsResult"></pre> <!-- ✅ FIXED -->
+<!-- CONTROLS -->
+<div class="controls">
+  <input id="vmName" placeholder="VM Name (CIP)">
+  <input id="port" placeholder="Port (22)">
+  <button onclick="runRCA()">Run RCA</button>
 </div>
  
-<!-- Alerts -->
-<div class="card">
-<h2>Alerts</h2>
-<input id="alertVM" placeholder="VM Name">
-<button onclick="loadAlerts()">Load Alerts</button>
-<pre id="alertResult"></pre>
+<!-- RCA -->
+<div class="panel">
+  <h2>VM RCA</h2>
+  <pre id="rcaOutput"></pre>
 </div>
  
-<!-- Graph -->
-<div class="card">
-<h2>Topology Graph</h2>
-<button onclick="loadGraph()">Load Graph</button>
-<div id="graph" style="height:400px;"></div>
+<!-- INCIDENT -->
+<div class="panel">
+  <h2>Incidents</h2>
+  <button onclick="loadIncidents()">Load Incidents</button>
+  <pre id="incidentOutput"></pre>
 </div>
  
+<!-- ALERT -->
+<div class="panel">
+  <h2>Alerts</h2>
+  <button onclick="loadAlerts()">Load Alerts</button>
+  <pre id="alertOutput"></pre>
+</div>
+ 
+<!-- ✅ TOPOLOGY -->
+<div class="panel">
+  <h2>Topology</h2>
+  <button onclick="loadTopology()">Load Topology</button>
+  <div id="graph" style="height:500px;background:#111;"></div>
+</div>
+ 
+<!-- ✅ LOAD JS AT END -->
 <script src="app.js"></script>
 <script src="graph.js"></script>
+
+<div class="panel">
+  <h2>Approval Workflow</h2>
+ 
+  <button onclick="requestFix('restart_vm')">Request VM Restart</button>
+  <button onclick="requestFix('fix_nsg')">Request NSG Fix</button>
+ 
+  <br><br>
+ 
+  <input id="approvalId" placeholder="Request ID to approve">
+  <button onclick="approveRequest()">Approve</button>
+ 
+  <br><br>
+ 
+  <button onclick="loadApprovals()">Refresh Requests</button>
+ 
+  <pre id="approvalOutput"></pre>
+</div>
  
 </body>
 </html>

@@ -19,15 +19,12 @@ class RCAEngine:
             return [record.data() for record in result]
  
     # -----------------------------------------
-    # MAIN RCA FUNCTION (UPGRADED)
+    # MAIN RCA FUNCTION (FIXED)
     # -----------------------------------------
     def analyze_path(self, vm, port):
  
         path = ["VM"]
         issues = []
-        root_cause = []
-        fixes = []
-        confidence = 0
  
         # -----------------------------
         # 1. CHECK VM EXISTS
@@ -48,105 +45,140 @@ class RCAEngine:
             }
  
         # -----------------------------
-        # 2. NSG CHECK (CORE DIFFERENTIATOR)
+        # 2. NSG CHECK
         # -----------------------------
         nsg_query = """
         MATCH (vm:VM {name: $vm})-[:HAS_NIC]->(nic)-[:SECURED_BY]->(nsg)
         OPTIONAL MATCH (nsg)-[:HAS_RULE]->(rule)
-        RETURN nsg.name AS nsg, rule.port AS port, rule.access AS access
+        RETURN rule.port AS port, rule.access AS access, rule.priority AS priority
+        ORDER BY rule.priority ASC
         """
- 
+        
         results = self.execute(nsg_query, {"vm": vm})
- 
+        
         path.append("NIC")
         path.append("NSG")
- 
-        port_allowed = False
- 
-        if not results:
-            issues.append("✔ No NSG attached (open access)")
-            port_allowed = True
+        
+        final_decision = None
+        
+        for r in results:
+            rule_port = str(r.get("port") or "")
+            rule_access = str(r.get("access") or "").lower()
+        
+            # ✅ FIRST MATCH ONLY (like Azure)
+            if rule_port == str(port):
+                final_decision = rule_access
+                break
+        
+        # ✅ APPLY RESULT
+        if final_decision == "allow":
+            issues.append(f"✔ NSG allows port {port}")
+        
+        elif final_decision == "deny":
+            issues.append(f"❌ NSG blocking port {port}")
+        
         else:
-            for r in results:
-                rule_port = str(r.get("port")) if r.get("port") else ""
-                rule_access = str(r.get("access")).lower() if r.get("access") else ""
- 
-                if rule_port == str(port) and rule_access == "allow":
-                    port_allowed = True
-                    break
- 
-            if port_allowed:
-                issues.append(f"✔ NSG allows port {port}")
-            else:
-                issues.append(f"❌ NSG blocking port {port}")
-                root_cause.append(f"NSG blocking port {port}")
-                fixes.append(f"Allow inbound rule for port {port}")
-                confidence += 50
+            issues.append(f"✔ No NSG rule affecting port {port}")
  
         # -----------------------------
-        # 3. METRICS CHECK (VM HEALTH)
+        # 3. METRICS CHECK (FIXED)
         # -----------------------------
         path.append("Metrics")
  
         metrics = self.get_latest_metrics(vm)
  
+        is_vm_down = False
+        cpu = 0
+        net_in = 0
+        net_out = 0
+ 
         if not metrics:
+            is_vm_down = True
             issues.append("❌ No metrics available")
-            root_cause.append("Agent not sending metrics")
-            fixes.append("Check CIP agent service")
-            confidence += 30
         else:
-            cpu = metrics.get("cpu") or 0
-            net_in = metrics.get("network_in") or 0
-            net_out = metrics.get("network_out") or 0
-            timestamp = metrics.get("ts")
+            cpu = float(metrics.get("cpu") or 0)
+            net_in = float(metrics.get("network_in") or 0)
+            net_out = float(metrics.get("network_out") or 0)
+            ts = metrics.get("ts")
  
-            # 🔥 Timestamp check (VM DOWN detection)
-            if timestamp:
-                if hasattr(timestamp, "to_native"):
-                    timestamp = timestamp.to_native()
+            try:
+                if ts:
+                    if hasattr(ts, "to_native"):
+                        ts = ts.to_native()
  
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
  
-                now = datetime.now(timezone.utc)
-                diff = (now - timestamp).total_seconds()
+                    now = datetime.now(timezone.utc)
+                    diff = (now - ts).total_seconds()
  
-                if diff > 20:
-                    issues.append("❌ VM not sending data (DOWN)")
-                    root_cause.append("VM is DOWN")
-                    fixes.append("Start VM or restart agent")
-                    confidence += 70
+                    # ✅ FIX: VM DOWN detection
+                    if diff > 30:
+                        is_vm_down = True
  
-            # CPU analysis
+            except Exception:
+                is_vm_down = True
+ 
+        # -----------------------------
+        # 4. ISSUE GENERATION (CLEAN)
+        # -----------------------------
+        if is_vm_down:
+            issues.append("❌ VM not sending data (DOWN)")
+            cpu = 0
+            net_in = 0
+            net_out = 0
+        else:
+            issues.append("✔ VM is running")
+ 
+            # CPU check
             if cpu > 80:
                 issues.append("🔥 High CPU usage")
-                root_cause.append("High CPU load on VM")
-                fixes.append("Scale VM or reduce workload")
-                confidence += 20
+            else:
+                issues.append("✔ CPU normal")
  
-            # Network analysis
+            # Network check
             if net_in == 0 and net_out == 0:
                 issues.append("⚠ No network activity")
-                root_cause.append("No incoming/outgoing traffic")
-                fixes.append("Check application traffic or connectivity")
-                confidence += 10
+            else:
+                issues.append("✔ Network activity normal")
  
         # -----------------------------
-        # FINAL RESULT
+        # 5. ROOT CAUSE ENGINE (PRIORITY FIX)
         # -----------------------------
-        if not root_cause:
-            root_cause = ["No issue detected"]
-            fixes = ["System healthy"]
-            confidence = 50
+        root_causes = []
+        fixes = []
+        confidence = 50
+ 
+        for issue in issues:
+ 
+            if "DOWN" in issue:
+                root_causes = ["VM is DOWN"]
+                fixes = ["Start VM or restart monitoring agent"]
+                confidence = 95
+                break
+ 
+            elif "High CPU" in issue:
+                root_causes.append("High CPU load on VM")
+                fixes.append("Scale VM or reduce workload")
+                confidence = 90
+ 
+            elif "blocking" in issue:
+                root_causes.append("Traffic blocked by NSG")
+                fixes.append("Allow required port in NSG")
+                confidence = 90
+ 
+        if not root_causes:
+            root_causes = ["System healthy"]
+            fixes = ["No action needed"]
+            confidence = 100
  
         return {
             "vm": vm,
             "path": path,
             "issues": issues,
-            "root_cause": " | ".join(set(root_cause)),
-            "fix": " | ".join(set(fixes)),
-            "confidence": min(confidence, 100)
+            "root_cause": " | ".join(root_causes),
+            "fix": " | ".join(fixes),
+            "confidence": confidence
         }
  
     # -----------------------------------------
@@ -157,10 +189,10 @@ class RCAEngine:
         query = """
         MATCH (m:Metrics {vm: $vm})
         RETURN
-            m.cpu AS cpu,
-            m.network_in AS network_in,
-            m.network_out AS network_out,
-            m.timestamp AS ts
+        m.cpu AS cpu,
+        m.network_in AS network_in,
+        m.network_out AS network_out,
+        m.timestamp AS ts
         ORDER BY ts DESC
         LIMIT 1
         """
