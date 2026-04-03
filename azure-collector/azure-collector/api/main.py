@@ -250,14 +250,7 @@ def global_incident(port: int = 22):
  
     return {"incidents": incidents}
 
-@app.get("/incident/global")
-def global_incident(port: int):
-    engine = IncidentEngine()
- 
-    vms = ["CIP", "VM1", "VM2", "VM3", "VM4"]
- 
-    incidents = engine.analyze_infrastructure(vms, port)
- 
+
     return {"incidents": incidents}
 
 @app.post("/approval/request")

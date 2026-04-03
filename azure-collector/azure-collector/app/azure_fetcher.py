@@ -3,23 +3,20 @@ from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
 from app.config import SUBSCRIPTION_ID
  
- 
 class AzureFetcher:
  
     def __init__(self):
         credential = DefaultAzureCredential()
- 
         self.compute_client = ComputeManagementClient(credential, SUBSCRIPTION_ID)
         self.network_client = NetworkManagementClient(credential, SUBSCRIPTION_ID)
  
     # -----------------------------------------
-    # EXISTING METHODS (UNCHANGED)
+    # VMs
     # -----------------------------------------
     def get_vms(self):
         vms = []
  
         for vm in self.compute_client.virtual_machines.list_all():
- 
             power_state = "unknown"
  
             try:
@@ -45,16 +42,6 @@ class AzureFetcher:
     def get_nics(self):
         return list(self.network_client.network_interfaces.list_all())
  
-    def get_subnets(self):
-        subnets = []
-        for vnet in self.network_client.virtual_networks.list_all():
-            for subnet in vnet.subnets:
-                subnets.append(subnet)
-        return subnets
- 
-    def get_vnets(self):
-        return list(self.network_client.virtual_networks.list_all())
- 
     def get_nsgs(self):
         return list(self.network_client.network_security_groups.list_all())
  
@@ -65,114 +52,105 @@ class AzureFetcher:
         return list(self.network_client.route_tables.list_all())
  
     def get_load_balancers(self):
-        lbs = list(self.network_client.load_balancers.list_all())
-        print("DEBUG LB COUNT:", len(lbs))
-        return lbs
- 
-    def get_nat_gateways(self):
-        return list(self.network_client.nat_gateways.list_all())
+        return list(self.network_client.load_balancers.list_all())
  
     # -----------------------------------------
-    # 🔥 NEW: TOPOLOGY BUILDER (CRITICAL FIX)
+    # 🔥 FINAL TOPOLOGY (FULLY FIXED)
     # -----------------------------------------
     def get_topology(self):
  
         nodes = []
         edges = []
- 
-        node_id = 1
-        node_map = {}  # prevents duplicates
+        node_map = {}
  
         vms = self.get_vms()
         nics = self.get_nics()
         nsgs = self.get_nsgs()
+        public_ips = self.get_public_ips()
+        route_tables = self.get_route_tables()
+        lbs = self.get_load_balancers()
  
         # -------------------------
         # VM NODES
         # -------------------------
         for vm in vms:
-            node_map[vm.id] = node_id
+            node_map[vm.id] = vm.id
  
             nodes.append({
-                "id": node_id,
+                "id": vm.id,
                 "name": vm.name,
                 "label": "VM",
                 "power_state": getattr(vm, "power_state", "unknown")
             })
  
-            node_id += 1
+        # -------------------------
+        # NIC NODES
+        # -------------------------
+        for nic in nics:
+            node_map[nic.id] = nic.id
+ 
+            nodes.append({
+                "id": nic.id,
+                "name": nic.name,
+                "label": "NIC"
+            })
  
         # -------------------------
-        # NIC NODES + VM LINKS
+        # VM → NIC (CORRECT)
+        # -------------------------
+        for vm in vms:
+ 
+            if not vm.network_profile:
+                continue
+ 
+            for nic_ref in vm.network_profile.network_interfaces:
+ 
+                edges.append({
+                    "source": vm.id,
+                    "target": nic_ref.id,
+                    "type": "HAS_NIC"
+                })
+ 
+                print("✅ LINK VM->NIC:", vm.name, "→", nic_ref.id)
+ 
+        # -------------------------
+        # NSG NODES + LINKS
         # -------------------------
         for nic in nics:
  
-            if nic.id not in node_map:
-                node_map[nic.id] = node_id
- 
-                nodes.append({
-                    "id": node_id,
-                    "name": nic.name,
-                    "label": "NIC"
-                })
- 
-                node_id += 1
- 
-            nic_id = node_map[nic.id]
- 
-            # Attach to VM
-            if nic.virtual_machine:
-                vm_id = node_map.get(nic.virtual_machine.id)
- 
-                if vm_id:
-                    edges.append({
-                        "source": vm_id,
-                        "target": nic_id,
-                        "type": "HAS_NIC"
-                    })
- 
-            # -------------------------
-            # NSG LINK
-            # -------------------------
             if nic.network_security_group:
  
                 nsg = nic.network_security_group
  
                 if nsg.id not in node_map:
-                    node_map[nsg.id] = node_id
+                    node_map[nsg.id] = nsg.id
  
                     nodes.append({
-                        "id": node_id,
+                        "id": nsg.id,
                         "name": nsg.id.split("/")[-1],
                         "label": "NSG"
                     })
  
-                    node_id += 1
- 
-                nsg_id = node_map[nsg.id]
- 
                 edges.append({
-                    "source": nic_id,
-                    "target": nsg_id,
+                    "source": nic.id,
+                    "target": nsg.id,
                     "type": "SECURED_BY"
                 })
  
         # -------------------------
-        # NSG RULES (🔥 PRIORITY FIX)
+        # NSG RULES
         # -------------------------
         for nsg in nsgs:
  
-            nsg_id = node_map.get(nsg.id)
- 
-            if not nsg_id:
+            if nsg.id not in node_map:
                 continue
  
             for rule in nsg.security_rules:
  
-                rule_node_id = node_id
+                rule_id = f"{nsg.id}/rule/{rule.name}"
  
                 nodes.append({
-                    "id": rule_node_id,
+                    "id": rule_id,
                     "name": rule.name,
                     "label": "RULE",
                     "port": str(rule.destination_port_range),
@@ -181,12 +159,105 @@ class AzureFetcher:
                 })
  
                 edges.append({
-                    "source": nsg_id,
-                    "target": rule_node_id,
+                    "source": nsg.id,
+                    "target": rule_id,
                     "type": "HAS_RULE"
                 })
  
-                node_id += 1
+        # -------------------------
+        # PUBLIC IP (FIXED LOGIC)
+        # -------------------------
+        for pip in public_ips:
+ 
+            node_map[pip.id] = pip.id
+ 
+            nodes.append({
+                "id": pip.id,
+                "name": pip.name,
+                "label": "PublicIP"
+            })
+ 
+            if pip.ip_configuration and pip.ip_configuration.id:
+ 
+                ip_id = pip.ip_configuration.id
+ 
+                # NIC case
+                if "networkInterfaces" in ip_id:
+                    nic_id = ip_id.split("/ipConfigurations")[0]
+ 
+                    edges.append({
+                        "source": nic_id,
+                        "target": pip.id,
+                        "type": "HAS_PUBLIC_IP"
+                    })
+ 
+                    print("✅ LINK NIC->PIP:", nic_id, "→", pip.name)
+ 
+                # Load Balancer case
+                elif "loadBalancers" in ip_id:
+                    lb_id = ip_id.split("/frontendIPConfigurations")[0]
+ 
+                    edges.append({
+                        "source": lb_id,
+                        "target": pip.id,
+                        "type": "HAS_PUBLIC_IP"
+                    })
+ 
+                    print("✅ LINK LB->PIP:", lb_id, "→", pip.name)
+ 
+        # -------------------------
+        # LOAD BALANCER → NIC
+        # -------------------------
+        for lb in lbs:
+ 
+            node_map[lb.id] = lb.id
+ 
+            nodes.append({
+                "id": lb.id,
+                "name": lb.name,
+                "label": "LoadBalancer"
+            })
+ 
+            for pool in lb.backend_address_pools:
+ 
+                if not pool.backend_ip_configurations:
+                    continue
+ 
+                for backend in pool.backend_ip_configurations:
+ 
+                    nic_id = backend.id.split("/ipConfigurations")[0]
+ 
+                    edges.append({
+                        "source": lb.id,
+                        "target": nic_id,
+                        "type": "BALANCES"
+                    })
+ 
+                    print("✅ LINK LB->NIC:", lb.name, "→", nic_id)
+ 
+        # -------------------------
+        # ROUTE TABLE
+        # -------------------------
+        for rt in route_tables:
+ 
+            node_map[rt.id] = rt.id
+ 
+            nodes.append({
+                "id": rt.id,
+                "name": rt.name,
+                "label": "RouteTable"
+            })
+ 
+            if rt.subnets:
+                for subnet in rt.subnets:
+ 
+                    edges.append({
+                        "source": subnet.id,
+                        "target": rt.id,
+                        "type": "USES_ROUTE_TABLE"
+                    })
+ 
+                    print("✅ LINK SUBNET->RT:", subnet.id, "→", rt.name)
  
         return {
             "nodes": nodes,

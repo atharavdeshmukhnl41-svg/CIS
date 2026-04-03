@@ -3,6 +3,7 @@ from app.priority_engine import PriorityEngine
 from neo4j import GraphDatabase
 from app.remediation_engine import RemediationEngine
  
+ 
 class IncidentEngine:
  
     def __init__(self):
@@ -16,50 +17,46 @@ class IncidentEngine:
         )
  
     # -----------------------------------------
-    # GET ONLY ACTIVE VMs (CRITICAL FIX)
+    # OPTIONAL (NOT USED ANYMORE)
     # -----------------------------------------
     def get_active_vms(self):
- 
         query = """
         MATCH (m:Metrics)
         RETURN DISTINCT m.vm AS vm
         """
- 
         with self.driver.session() as session:
             result = session.run(query).data()
  
         return [r["vm"] for r in result if r.get("vm")]
  
     # -----------------------------------------
-    # MAIN INCIDENT ENGINE
+    # MAIN INCIDENT ENGINE (FINAL FIXED)
     # -----------------------------------------
     def analyze_infrastructure(self, vms, port):
- 
-        active_vms = self.get_active_vms()
- 
-        # ❗ No active VMs
-        if not active_vms:
-            return []
  
         incident_map = {}
  
         for vm in vms:
  
-            # ❌ Skip inactive VMs
-            if vm not in active_vms:
-                continue
- 
             try:
                 result = self.rca.analyze_path(vm, port)
+ 
+                if not result or not isinstance(result, dict):
+                    print(f"❌ Invalid RCA result for {vm}")
+                    continue
+ 
             except Exception as e:
-                print(f"RCA ERROR for {vm}:", e)
+                print(f"❌ RCA ERROR for {vm}:", e)
                 continue
  
-            root = result.get("root_cause", "unknown").strip()
+            root = str(result.get("root_cause") or "unknown").strip()
             fix = result.get("fix", "No fix available")
             confidence = result.get("confidence", 50)
  
-            # Normalize root cause key (avoid duplicates due to spacing/case)
+            # 🔥 SKIP HEALTHY SYSTEMS
+            if root.lower() == "system healthy":
+                continue
+ 
             root_key = root.lower()
  
             if root_key not in incident_map:
@@ -81,14 +78,24 @@ class IncidentEngine:
  
             affected_vms = list(data["affected_vms"])
  
-            priority = self.priority.calculate_priority(
-                data["root_cause"],
-                affected_vms,
-                data["confidence"]
-            )
+            # SAFE PRIORITY
+            try:
+                priority = self.priority.calculate_priority(
+                    data["root_cause"],
+                    affected_vms,
+                    data["confidence"]
+                )
+            except Exception as e:
+                print("⚠ Priority error:", e)
+                priority = "MEDIUM"
  
-            steps = self.remediation.get_steps(data["root_cause"])
-            
+            # SAFE REMEDIATION
+            try:
+                steps = self.remediation.get_steps(data["root_cause"])
+            except Exception as e:
+                print("⚠ Remediation error:", e)
+                steps = ["No remediation steps available"]
+ 
             incidents.append({
                 "incident_id": f"INC-{1000 + i}",
                 "root_cause": data["root_cause"],
@@ -100,7 +107,7 @@ class IncidentEngine:
             })
  
         # -----------------------------------------
-        # SORT BY PRIORITY (CRITICAL FIRST)
+        # SORT BY PRIORITY
         # -----------------------------------------
         priority_order = {
             "CRITICAL": 1,

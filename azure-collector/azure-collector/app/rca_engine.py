@@ -1,7 +1,6 @@
 from neo4j import GraphDatabase
 from datetime import datetime, timezone
  
- 
 class RCAEngine:
  
     def __init__(self):
@@ -11,7 +10,7 @@ class RCAEngine:
         )
  
     # -----------------------------------------
-    # HELPER EXECUTE
+    # HELPER
     # -----------------------------------------
     def execute(self, query, params=None):
         with self.driver.session() as session:
@@ -19,7 +18,7 @@ class RCAEngine:
             return [record.data() for record in result]
  
     # -----------------------------------------
-    # MAIN RCA FUNCTION (FIXED)
+    # MAIN RCA
     # -----------------------------------------
     def analyze_path(self, vm, port):
  
@@ -27,7 +26,7 @@ class RCAEngine:
         issues = []
  
         # -----------------------------
-        # 1. CHECK VM EXISTS
+        # 1. VM CHECK
         # -----------------------------
         vm_check = self.execute(
             "MATCH (v:VM {name:$vm}) RETURN v",
@@ -45,43 +44,93 @@ class RCAEngine:
             }
  
         # -----------------------------
-        # 2. NSG CHECK
+        # 2. NIC
         # -----------------------------
-        nsg_query = """
-        MATCH (vm:VM {name: $vm})-[:HAS_NIC]->(nic)-[:SECURED_BY]->(nsg)
-        OPTIONAL MATCH (nsg)-[:HAS_RULE]->(rule)
-        RETURN rule.port AS port, rule.access AS access, rule.priority AS priority
-        ORDER BY rule.priority ASC
-        """
-        
-        results = self.execute(nsg_query, {"vm": vm})
-        
         path.append("NIC")
-        path.append("NSG")
-        
-        final_decision = None
-        
-        for r in results:
-            rule_port = str(r.get("port") or "")
-            rule_access = str(r.get("access") or "").lower()
-        
-            # ✅ FIRST MATCH ONLY (like Azure)
-            if rule_port == str(port):
-                final_decision = rule_access
-                break
-        
-        # ✅ APPLY RESULT
-        if final_decision == "allow":
-            issues.append(f"✔ NSG allows port {port}")
-        
-        elif final_decision == "deny":
-            issues.append(f"❌ NSG blocking port {port}")
-        
-        else:
-            issues.append(f"✔ No NSG rule affecting port {port}")
  
         # -----------------------------
-        # 3. METRICS CHECK (FIXED)
+        # 3. LOAD BALANCER
+        # -----------------------------
+        lb = self.execute("""
+        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->(nic)<-[:BALANCES]-(lb:LoadBalancer)
+        RETURN lb.name AS lb
+        """, {"vm": vm})
+ 
+        if lb:
+            path.insert(0, "LoadBalancer")
+            issues.append(f"✔ Traffic via LB: {lb[0]['lb']}")
+        else:
+            issues.append("⚠ No Load Balancer")
+ 
+        # -----------------------------
+        # 4. PUBLIC IP
+        # -----------------------------
+        pip = self.execute("""
+        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->(nic)-[:HAS_PUBLIC_IP]->(pip)
+        RETURN pip.name AS pip
+        """, {"vm": vm})
+ 
+        if pip:
+            path.insert(0, "PublicIP")
+            issues.append(f"✔ Public IP attached: {pip[0]['pip']}")
+        else:
+            issues.append("❌ No Public IP attached")
+ 
+        # -----------------------------
+        # 5. NSG
+        # -----------------------------
+        path.append("NSG")
+ 
+        rules = self.execute("""
+        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->()-[:SECURED_BY]->(nsg)-[:HAS_RULE]->(r)
+        RETURN r.port AS port, r.access AS access, r.priority AS priority
+        """, {"vm": vm})
+ 
+        port_allowed = True
+ 
+        if rules:
+            rules = sorted(rules, key=lambda x: x.get("priority", 9999))
+            for r in rules:
+                if str(r["port"]) in [str(port), "*"]:
+                    if r["access"] == "deny":
+                        port_allowed = False
+                        issues.append(f"❌ NSG blocks port {port} (priority {r['priority']})")
+                        break
+                    else:
+                        issues.append(f"✔ NSG allows port {port} (priority {r['priority']})")
+                        break
+        else:
+            issues.append("✔ No NSG (open)")
+ 
+        # -----------------------------
+        # 6. ROUTE TABLE (SAFE FIX)
+        # -----------------------------
+        path.append("RouteTable")
+ 
+        rt = self.execute("""
+        MATCH (rt:RouteTable)
+        RETURN rt.name AS rt LIMIT 1
+        """)
+ 
+        if rt:
+            issues.append(f"✔ Route Table present: {rt[0]['rt']}")
+        else:
+            issues.append("⚠ No Route Table (default routing)")
+ 
+        # -----------------------------
+        # 7. INTERNET CHECK (FIXED)
+        # -----------------------------
+        if not port_allowed:
+            issues.append("❌ Traffic blocked before VM")
+ 
+        elif not pip and not lb:
+            issues.append("❌ No Internet entry point")
+ 
+        else:
+            issues.append("✔ Internet reachable")
+ 
+        # -----------------------------
+        # 8. METRICS
         # -----------------------------
         path.append("Metrics")
  
@@ -89,16 +138,13 @@ class RCAEngine:
  
         is_vm_down = False
         cpu = 0
-        net_in = 0
-        net_out = 0
  
         if not metrics:
             is_vm_down = True
             issues.append("❌ No metrics available")
+ 
         else:
             cpu = float(metrics.get("cpu") or 0)
-            net_in = float(metrics.get("network_in") or 0)
-            net_out = float(metrics.get("network_out") or 0)
             ts = metrics.get("ts")
  
             try:
@@ -109,103 +155,103 @@ class RCAEngine:
                     if ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
  
-                    now = datetime.now(timezone.utc)
-                    diff = (now - ts).total_seconds()
+                    diff = (datetime.now(timezone.utc) - ts).total_seconds()
  
-                    # ✅ FIX: VM DOWN detection
                     if diff > 30:
                         is_vm_down = True
- 
-            except Exception:
+            except:
                 is_vm_down = True
  
         # -----------------------------
-        # 4. ISSUE GENERATION (CLEAN)
+        # 9. HEALTH
         # -----------------------------
         if is_vm_down:
-            issues.append("❌ VM not sending data (DOWN)")
-            cpu = 0
-            net_in = 0
-            net_out = 0
+            issues.append("❌ VM DOWN")
         else:
-            issues.append("✔ VM is running")
+            issues.append("✔ VM running")
  
-            # CPU check
-            if cpu > 80:
-                issues.append("🔥 High CPU usage")
-            else:
-                issues.append("✔ CPU normal")
- 
-            # Network check
-            if net_in == 0 and net_out == 0:
-                issues.append("⚠ No network activity")
-            else:
-                issues.append("✔ Network activity normal")
+        if cpu > 80:
+            issues.append("🔥 High CPU")
+        else:
+            issues.append("✔ CPU normal")
  
         # -----------------------------
-        # 5. ROOT CAUSE ENGINE (PRIORITY FIX)
+        # 10. FINAL ROOT CAUSE (FIXED PRIORITY)
         # -----------------------------
-        root_causes = []
-        fixes = []
-        confidence = 50
+        text = " ".join(issues)
  
-        for issue in issues:
+        # 🔴 1. VM DOWN
+        if "VM DOWN" in text:
+            return {
+                "vm": vm,
+                "path": path,
+                "issues": issues,
+                "root_cause": "VM is DOWN",
+                "fix": "Start VM or restart monitoring agent",
+                "confidence": 95
+            }
  
-            if "DOWN" in issue:
-                root_causes = ["VM is DOWN"]
-                fixes = ["Start VM or restart monitoring agent"]
-                confidence = 95
-                break
+        # 🔴 2. NSG BLOCK
+        if "NSG blocks" in text:
+            return {
+                "vm": vm,
+                "path": path,
+                "issues": issues,
+                "root_cause": "Traffic blocked by NSG",
+                "fix": "Update NSG rule",
+                "confidence": 90
+            }
  
-            elif "High CPU" in issue:
-                root_causes.append("High CPU load on VM")
-                fixes.append("Scale VM or reduce workload")
-                confidence = 90
+        # 🔴 3. HIGH CPU (🔥 FIX)
+        if "High CPU" in text:
+            return {
+                "vm": vm,
+                "path": path,
+                "issues": issues,
+                "root_cause": "High CPU usage on VM",
+                "fix": "Scale VM or reduce workload",
+                "confidence": 92
+            }
  
-            elif "blocking" in issue:
-                root_causes.append("Traffic blocked by NSG")
-                fixes.append("Allow required port in NSG")
-                confidence = 90
+        # 🔴 4. NETWORK ISSUE
+        if "No Public IP" in text or "No Internet entry point" in text:
+            return {
+                "vm": vm,
+                "path": path,
+                "issues": issues,
+                "root_cause": "No Public IP or Load Balancer",
+                "fix": "Attach Public IP or Load Balancer",
+                "confidence": 85
+            }
  
-        if not root_causes:
-            root_causes = ["System healthy"]
-            fixes = ["No action needed"]
-            confidence = 100
- 
+        # 🟢 DEFAULT
         return {
             "vm": vm,
             "path": path,
             "issues": issues,
-            "root_cause": " | ".join(root_causes),
-            "fix": " | ".join(fixes),
-            "confidence": confidence
+            "root_cause": "System healthy",
+            "fix": "No action needed",
+            "confidence": 100
         }
  
     # -----------------------------------------
-    # METRICS FETCH
+    # METRICS
     # -----------------------------------------
     def get_latest_metrics(self, vm):
  
         query = """
         MATCH (m:Metrics {vm: $vm})
-        RETURN
-        m.cpu AS cpu,
-        m.network_in AS network_in,
-        m.network_out AS network_out,
-        m.timestamp AS ts
+        RETURN m.cpu AS cpu,
+               m.network_in AS network_in,
+               m.network_out AS network_out,
+               m.timestamp AS ts
         ORDER BY ts DESC
         LIMIT 1
         """
  
         result = self.execute(query, {"vm": vm})
  
-        if not result:
-            return None
+        return result[0] if result else None
  
-        return result[0]
- 
-    # -----------------------------------------
-    # CLOSE
-    # -----------------------------------------
     def close(self):
         self.driver.close()
