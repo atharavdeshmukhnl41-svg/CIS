@@ -1,14 +1,11 @@
 from app.rca_engine import RCAEngine
-from app.priority_engine import PriorityEngine
-from neo4j import GraphDatabase
 from app.remediation_engine import RemediationEngine
- 
+from neo4j import GraphDatabase
  
 class IncidentEngine:
  
     def __init__(self):
         self.rca = RCAEngine()
-        self.priority = PriorityEngine()
         self.remediation = RemediationEngine()
  
         self.driver = GraphDatabase.driver(
@@ -16,99 +13,107 @@ class IncidentEngine:
             auth=("neo4j", "password")
         )
  
-    # -----------------------------------------
-    # OPTIONAL (NOT USED ANYMORE)
-    # -----------------------------------------
+    # =========================
+    # GET ACTIVE VMs
+    # =========================
     def get_active_vms(self):
-        query = """
-        MATCH (m:Metrics)
-        RETURN DISTINCT m.vm AS vm
-        """
+ 
         with self.driver.session() as session:
-            result = session.run(query).data()
+            data = session.run("""
+            MATCH (v:VM)
+            RETURN DISTINCT v.name AS vm
+            """).data()
  
-        return [r["vm"] for r in result if r.get("vm")]
+        return [r["vm"] for r in data if r.get("vm")]
  
-    # -----------------------------------------
-    # MAIN INCIDENT ENGINE (FINAL FIXED)
-    # -----------------------------------------
+    # =========================
+    # INCIDENT ENGINE
+    # =========================
     def analyze_infrastructure(self, vms, port):
+ 
+        vm_list = self.get_active_vms()
+ 
+        if not vm_list:
+            return []
  
         incident_map = {}
  
-        for vm in vms:
+        for vm in vm_list:
  
             try:
                 result = self.rca.analyze_path(vm, port)
- 
-                if not result or not isinstance(result, dict):
-                    print(f"❌ Invalid RCA result for {vm}")
-                    continue
- 
             except Exception as e:
-                print(f"❌ RCA ERROR for {vm}:", e)
+                print(f"RCA ERROR {vm}:", e)
                 continue
  
-            root = str(result.get("root_cause") or "unknown").strip()
-            fix = result.get("fix", "No fix available")
-            confidence = result.get("confidence", 50)
+            root = result.get("root_cause", "unknown")
+            confidence = result.get("confidence", 80)
  
-            # 🔥 SKIP HEALTHY SYSTEMS
-            if root.lower() == "system healthy":
-                continue
+            # =========================
+            # 🔥 ROOT CAUSE MAPPING
+            # =========================
+            if root == "Blackhole route":
+                fix = "Update route table next hop to Internet"
+                priority = "CRITICAL"
+                confidence = 95
  
-            root_key = root.lower()
+            elif root == "NSG blocking":
+                fix = "Allow required port in NSG"
+                priority = "HIGH"
  
-            if root_key not in incident_map:
-                incident_map[root_key] = {
+            elif root == "LB misconfiguration":
+                fix = "Attach VM NIC to Load Balancer backend pool"
+                priority = "HIGH"
+ 
+            elif root == "Agent not running":
+                fix = "Restart CIP agent service"
+                priority = "HIGH"
+ 
+            elif root == "High CPU":
+                fix = "Scale VM or reduce workload"
+                priority = "MEDIUM"
+ 
+            elif root == "No Internet":
+                fix = "Attach Public IP or Load Balancer"
+                priority = "HIGH"
+ 
+            else:
+                fix = "No action needed"
+                priority = "LOW"
+ 
+            key = root.lower()
+ 
+            if key not in incident_map:
+                incident_map[key] = {
                     "root_cause": root,
                     "affected_vms": set(),
                     "fix": fix,
+                    "priority": priority,
                     "confidence": confidence
                 }
  
-            incident_map[root_key]["affected_vms"].add(vm)
+            incident_map[key]["affected_vms"].add(vm)
  
-        # -----------------------------------------
-        # BUILD FINAL INCIDENT LIST
-        # -----------------------------------------
+        # =========================
+        # BUILD INCIDENT LIST
+        # =========================
         incidents = []
  
         for i, data in enumerate(incident_map.values()):
  
-            affected_vms = list(data["affected_vms"])
- 
-            # SAFE PRIORITY
-            try:
-                priority = self.priority.calculate_priority(
-                    data["root_cause"],
-                    affected_vms,
-                    data["confidence"]
-                )
-            except Exception as e:
-                print("⚠ Priority error:", e)
-                priority = "MEDIUM"
- 
-            # SAFE REMEDIATION
-            try:
-                steps = self.remediation.get_steps(data["root_cause"])
-            except Exception as e:
-                print("⚠ Remediation error:", e)
-                steps = ["No remediation steps available"]
- 
             incidents.append({
                 "incident_id": f"INC-{1000 + i}",
                 "root_cause": data["root_cause"],
-                "affected_vms": affected_vms,
+                "affected_vms": list(data["affected_vms"]),
                 "fix": data["fix"],
-                "steps": steps,
+                "steps": self.remediation.get_steps(data["root_cause"]),
                 "confidence": data["confidence"],
-                "priority": priority
+                "priority": data["priority"]
             })
  
-        # -----------------------------------------
+        # =========================
         # SORT BY PRIORITY
-        # -----------------------------------------
+        # =========================
         priority_order = {
             "CRITICAL": 1,
             "HIGH": 2,

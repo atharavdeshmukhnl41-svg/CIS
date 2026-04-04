@@ -9,31 +9,26 @@ class RCAEngine:
             auth=("neo4j", "password")
         )
  
-    # -----------------------------------------
-    # HELPER
-    # -----------------------------------------
     def execute(self, query, params=None):
         with self.driver.session() as session:
             result = session.run(query, params or {})
-            return [record.data() for record in result]
+            return [r.data() for r in result]
  
-    # -----------------------------------------
-    # MAIN RCA
-    # -----------------------------------------
+    # =====================================
+    # MAIN RCA ENGINE (FULL DETAILED OUTPUT)
+    # =====================================
     def analyze_path(self, vm, port):
  
-        path = ["VM"]
+        path = ["VM", "NIC"]
         issues = []
+        root_cause = "System healthy"
+        fix = "No action needed"
+        confidence = 100
  
         # -----------------------------
-        # 1. VM CHECK
+        # 1. VM EXISTS
         # -----------------------------
-        vm_check = self.execute(
-            "MATCH (v:VM {name:$vm}) RETURN v",
-            {"vm": vm}
-        )
- 
-        if not vm_check:
+        if not self.execute("MATCH (v:VM {name:$vm}) RETURN v", {"vm": vm}):
             return {
                 "vm": vm,
                 "path": [],
@@ -44,40 +39,53 @@ class RCAEngine:
             }
  
         # -----------------------------
-        # 2. NIC
-        # -----------------------------
-        path.append("NIC")
- 
-        # -----------------------------
-        # 3. LOAD BALANCER
+        # 2. LOAD BALANCER
         # -----------------------------
         lb = self.execute("""
-        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->(nic)<-[:BALANCES]-(lb:LoadBalancer)
+        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->(nic)
+        OPTIONAL MATCH (lb:LoadBalancer)-[:BALANCES]->(nic)
         RETURN lb.name AS lb
         """, {"vm": vm})
  
-        if lb:
+        lb_present = any(x.get("lb") for x in lb)
+ 
+        if lb_present:
             path.insert(0, "LoadBalancer")
             issues.append(f"✔ Traffic via LB: {lb[0]['lb']}")
         else:
             issues.append("⚠ No Load Balancer")
  
+        # LB MISCONFIG
+        lb_check = self.execute("""
+        MATCH (lb:LoadBalancer)
+        OPTIONAL MATCH (lb)-[:BALANCES]->(nic)<-[:HAS_NIC]-(vm:VM {name:$vm})
+        RETURN nic
+        """, {"vm": vm})
+ 
+        if lb_check and not any(x["nic"] for x in lb_check):
+            issues.append("❌ VM not in LB backend pool")
+ 
         # -----------------------------
-        # 4. PUBLIC IP
+        # 3. PUBLIC IP
         # -----------------------------
         pip = self.execute("""
         MATCH (vm:VM {name:$vm})-[:HAS_NIC]->(nic)-[:HAS_PUBLIC_IP]->(pip)
         RETURN pip.name AS pip
         """, {"vm": vm})
  
-        if pip:
+        pip_present = len(pip) > 0
+ 
+        if pip_present:
             path.insert(0, "PublicIP")
-            issues.append(f"✔ Public IP attached: {pip[0]['pip']}")
+            issues.append(f"✔ Public IP: {pip[0]['pip']}")
         else:
-            issues.append("❌ No Public IP attached")
+            if lb_present:
+                issues.append("⚠ No Public IP (LB present)")
+            else:
+                issues.append("❌ No Public IP attached")
  
         # -----------------------------
-        # 5. NSG
+        # 4. NSG
         # -----------------------------
         path.append("NSG")
  
@@ -89,60 +97,73 @@ class RCAEngine:
         port_allowed = True
  
         if rules:
-            rules = sorted(rules, key=lambda x: x.get("priority", 9999))
+            rules = sorted(rules, key=lambda x: x["priority"])
+ 
             for r in rules:
                 if str(r["port"]) in [str(port), "*"]:
                     if r["access"] == "deny":
                         port_allowed = False
                         issues.append(f"❌ NSG blocks port {port} (priority {r['priority']})")
-                        break
                     else:
                         issues.append(f"✔ NSG allows port {port} (priority {r['priority']})")
-                        break
+                    break
         else:
             issues.append("✔ No NSG (open)")
  
         # -----------------------------
-        # 6. ROUTE TABLE (SAFE FIX)
+        # 5. ROUTE TABLE + BLACKHOLE
         # -----------------------------
         path.append("RouteTable")
  
-        rt = self.execute("""
-        MATCH (rt:RouteTable)
-        RETURN rt.name AS rt LIMIT 1
-        """)
+        routes = self.execute("""
+        MATCH (vm:VM {name:$vm})-[:HAS_NIC]->()-[:IN_SUBNET]->()
+        -[:USES_ROUTE_TABLE]->(rt)-[:HAS_ROUTE]->(r)
+        RETURN r.address_prefix AS prefix, r.next_hop AS hop
+        """, {"vm": vm})
  
-        if rt:
-            issues.append(f"✔ Route Table present: {rt[0]['rt']}")
+        blackhole = False
+ 
+        if routes:
+            issues.append("✔ Route Table attached")
+ 
+            for r in routes:
+                if r["prefix"] == "0.0.0.0/0" and r["hop"] == "None":
+                    blackhole = True
+                    issues.append("❌ Blackhole route blocking internet")
         else:
             issues.append("⚠ No Route Table (default routing)")
  
         # -----------------------------
-        # 7. INTERNET CHECK (FIXED)
+        # 6. INTERNET CHECK
         # -----------------------------
         if not port_allowed:
-            issues.append("❌ Traffic blocked before VM")
+            issues.append("❌ Traffic blocked by NSG")
  
-        elif not pip and not lb:
-            issues.append("❌ No Internet entry point")
+        elif blackhole:
+            issues.append("❌ Internet blocked by route table")
+ 
+        elif lb_present:
+            issues.append("✔ Internet reachable via Load Balancer")
+ 
+        elif pip_present:
+            issues.append("✔ Internet reachable via Public IP")
  
         else:
-            issues.append("✔ Internet reachable")
+            issues.append("❌ No Internet entry point")
  
         # -----------------------------
-        # 8. METRICS
+        # 7. METRICS
         # -----------------------------
         path.append("Metrics")
  
         metrics = self.get_latest_metrics(vm)
  
-        is_vm_down = False
         cpu = 0
+        metrics_issue = False
  
         if not metrics:
-            is_vm_down = True
-            issues.append("❌ No metrics available")
- 
+            metrics_issue = True
+            issues.append("⚠ No metrics available (agent issue)")
         else:
             cpu = float(metrics.get("cpu") or 0)
             ts = metrics.get("ts")
@@ -157,99 +178,82 @@ class RCAEngine:
  
                     diff = (datetime.now(timezone.utc) - ts).total_seconds()
  
-                    if diff > 30:
-                        is_vm_down = True
+                    if diff > 60:
+                        metrics_issue = True
+                        issues.append("⚠ Metrics stale")
             except:
-                is_vm_down = True
+                metrics_issue = True
  
         # -----------------------------
-        # 9. HEALTH
+        # 8. HEALTH
         # -----------------------------
-        if is_vm_down:
-            issues.append("❌ VM DOWN")
+        if metrics_issue:
+            issues.append("⚠ VM state unknown (metrics missing)")
         else:
             issues.append("✔ VM running")
  
-        if cpu > 80:
-            issues.append("🔥 High CPU")
-        else:
-            issues.append("✔ CPU normal")
+            if cpu > 80:
+                issues.append("🔥 High CPU usage")
+            else:
+                issues.append("✔ CPU normal")
  
         # -----------------------------
-        # 10. FINAL ROOT CAUSE (FIXED PRIORITY)
+        # 9. ROOT CAUSE PRIORITY
         # -----------------------------
         text = " ".join(issues)
  
-        # 🔴 1. VM DOWN
-        if "VM DOWN" in text:
-            return {
-                "vm": vm,
-                "path": path,
-                "issues": issues,
-                "root_cause": "VM is DOWN",
-                "fix": "Start VM or restart monitoring agent",
-                "confidence": 95
-            }
+        if "Blackhole route" in text:
+            root_cause = "Blackhole route"
+            fix = "Update route table next hop to Internet"
+            confidence = 95
  
-        # 🔴 2. NSG BLOCK
-        if "NSG blocks" in text:
-            return {
-                "vm": vm,
-                "path": path,
-                "issues": issues,
-                "root_cause": "Traffic blocked by NSG",
-                "fix": "Update NSG rule",
-                "confidence": 90
-            }
+        elif "NSG blocks" in text:
+            root_cause = "Traffic blocked by NSG"
+            fix = "Allow port in NSG"
+            confidence = 90
  
-        # 🔴 3. HIGH CPU (🔥 FIX)
-        if "High CPU" in text:
-            return {
-                "vm": vm,
-                "path": path,
-                "issues": issues,
-                "root_cause": "High CPU usage on VM",
-                "fix": "Scale VM or reduce workload",
-                "confidence": 92
-            }
+        elif "backend pool" in text:
+            root_cause = "Load Balancer misconfiguration"
+            fix = "Add VM to backend pool"
+            confidence = 92
  
-        # 🔴 4. NETWORK ISSUE
-        if "No Public IP" in text or "No Internet entry point" in text:
-            return {
-                "vm": vm,
-                "path": path,
-                "issues": issues,
-                "root_cause": "No Public IP or Load Balancer",
-                "fix": "Attach Public IP or Load Balancer",
-                "confidence": 85
-            }
+        elif "High CPU" in text:
+            root_cause = "High CPU usage"
+            fix = "Scale VM or reduce load"
+            confidence = 90
  
-        # 🟢 DEFAULT
+        elif "metrics" in text.lower():
+            root_cause = "Monitoring agent not sending data"
+            fix = "Restart CIP agent"
+            confidence = 80
+ 
+        elif "No Internet entry point" in text:
+            root_cause = "No Public IP or Load Balancer"
+            fix = "Attach Public IP or configure LB"
+            confidence = 85
+ 
         return {
             "vm": vm,
             "path": path,
             "issues": issues,
-            "root_cause": "System healthy",
-            "fix": "No action needed",
-            "confidence": 100
+            "root_cause": root_cause,
+            "fix": fix,
+            "confidence": confidence
         }
  
-    # -----------------------------------------
+    # -----------------------------
     # METRICS
-    # -----------------------------------------
+    # -----------------------------
     def get_latest_metrics(self, vm):
  
-        query = """
-        MATCH (m:Metrics {vm: $vm})
+        result = self.execute("""
+        MATCH (m:Metrics {vm:$vm})
         RETURN m.cpu AS cpu,
                m.network_in AS network_in,
                m.network_out AS network_out,
                m.timestamp AS ts
-        ORDER BY ts DESC
-        LIMIT 1
-        """
- 
-        result = self.execute(query, {"vm": vm})
+        ORDER BY ts DESC LIMIT 1
+        """, {"vm": vm})
  
         return result[0] if result else None
  

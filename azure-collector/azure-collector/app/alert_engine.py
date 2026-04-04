@@ -2,7 +2,6 @@ from app.rca_engine import RCAEngine
 from neo4j import GraphDatabase
 from app.config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
  
- 
 class AlertEngine:
  
     def __init__(self):
@@ -13,30 +12,29 @@ class AlertEngine:
         )
  
     # =========================
-    # CHECK METRICS & TRIGGER RCA
+    # MAIN ALERT EVALUATION
     # =========================
-    def evaluate_vm(self, vm_name):
+    def evaluate_vm(self, vm_name, port=80):
  
-        metrics = self.rca.get_metrics(vm_name)
+        rca_result = self.rca.analyze_path(vm_name, port)
  
-        if not metrics or "error" in metrics:
-            return None
+        if not rca_result:
+            return {
+                "vm": vm_name,
+                "alerts": ["❌ RCA failed"]
+            }
  
+        issues = rca_result.get("issues", [])
         alerts = []
  
-        # CPU threshold
-        if metrics["cpu"] and metrics["cpu"] > 80:
-            alerts.append("High CPU")
+        # 🔥 CRITICAL FIX: derive alerts from RCA issues
+        for issue in issues:
+            if "❌" in issue or "🔥" in issue or "⚠" in issue:
+                alerts.append(issue)
  
-        # No network activity
-        if metrics["network_in"] == 0 and metrics["network_out"] == 0:
-            alerts.append("No Network Activity")
- 
+        # fallback
         if not alerts:
-            return None
- 
-        # Run RCA automatically
-        rca_result = self.rca.analyze_path(vm_name, 80)
+            alerts.append("✔ System healthy")
  
         alert_data = {
             "vm": vm_name,
@@ -44,7 +42,7 @@ class AlertEngine:
             "rca": rca_result
         }
  
-        # Store in Neo4j
+        # store in Neo4j
         self.store_alert(alert_data)
  
         return alert_data
@@ -59,6 +57,7 @@ class AlertEngine:
         CREATE (a:Alert {
             issues:$issues,
             path:$path,
+            root_cause:$root,
             timestamp: datetime()
         })
         MERGE (vm)-[:HAS_ALERT]->(a)
@@ -68,6 +67,7 @@ class AlertEngine:
             session.run(
                 query,
                 vm=alert["vm"],
-                issues=alert["rca"]["issues"],
-                path=alert["rca"]["path"]
+                issues=alert["rca"].get("issues", []),
+                path=alert["rca"].get("path", []),
+                root=alert["rca"].get("root_cause", "")
             )
