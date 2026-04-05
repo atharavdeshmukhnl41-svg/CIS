@@ -46,6 +46,25 @@ class TopologyBuilder:
             "type": rel_type
         })
  
+    def build_resource_properties(self, resource, type_hint):
+        resource_group = "Unknown"
+        try:
+            if resource and getattr(resource, "id", None):
+                resource_group = resource.id.split("/resourceGroups/")[1].split("/")[0]
+        except Exception:
+            resource_group = "Unknown"
+ 
+        location = getattr(resource, "location", None) or "Unknown"
+        state = getattr(resource, "provisioning_state", None) or getattr(resource, "provisioningState", None) or "Unknown"
+        resource_type = getattr(resource, "type", None) or type_hint
+ 
+        return {
+            "resource_group": resource_group,
+            "location": location,
+            "state": state,
+            "type": resource_type
+        }
+ 
     # =========================
     # BUILD TOPOLOGY (FINAL)
     # =========================
@@ -67,6 +86,7 @@ class TopologyBuilder:
         # =========================
         for vm in vms:
             self.add_node(vm.id, "VM", vm.name, {
+                **self.build_resource_properties(vm, "Microsoft.Compute/virtualMachines"),
                 "power_state": getattr(vm, "power_state", "running")
             })
  
@@ -94,7 +114,7 @@ class TopologyBuilder:
         # =========================
         for nic in nics:
  
-            self.add_node(nic.id, "NIC", nic.name)
+            self.add_node(nic.id, "NIC", nic.name, self.build_resource_properties(nic, "Microsoft.Network/networkInterfaces"))
  
             nic_id = nic.id.lower().strip()
             nic_name = nic.name.lower().strip()
@@ -131,7 +151,9 @@ class TopologyBuilder:
         # =========================
         for subnet in subnets:
  
-            self.add_node(subnet.id, "Subnet", subnet.name)
+            self.add_node(subnet.id, "Subnet", subnet.name, {
+                **self.build_resource_properties(subnet, "Microsoft.Network/virtualNetworks/subnets")
+            })
  
             if "/subnets/" in subnet.id:
                 vnet_id = subnet.id.split("/subnets/")[0]
@@ -149,7 +171,7 @@ class TopologyBuilder:
         # VNET
         # =========================
         for vnet in vnets:
-            self.add_node(vnet.id, "VNet", vnet.name)
+            self.add_node(vnet.id, "VNet", vnet.name, self.build_resource_properties(vnet, "Microsoft.Network/virtualNetworks"))
         # =========================
 
         # NSG RULES (FINAL REAL FIX)
@@ -270,14 +292,14 @@ class TopologyBuilder:
         # PUBLIC IP
         # =========================
         for pip in public_ips:
-            self.add_node(pip.id, "PublicIP", pip.name)
+            self.add_node(pip.id, "PublicIP", pip.name, self.build_resource_properties(pip, "Microsoft.Network/publicIPAddresses"))
  
         # =========================
         # ROUTE TABLE
         # =========================
         for rt in route_tables:
  
-            self.add_node(rt.id, "RouteTable", rt.name)
+            self.add_node(rt.id, "RouteTable", rt.name, self.build_resource_properties(rt, "Microsoft.Network/routeTables"))
  
             try:
                 if rt.subnets:
@@ -292,7 +314,9 @@ class TopologyBuilder:
                     route_id = f"{rt.id}-{route.name}"
  
                     self.add_node(route_id, "Route", route.name, {
-                        "next_hop": route.next_hop_type
+                        **self.build_resource_properties(rt, "Microsoft.Network/routeTables/routes"),
+                        "next_hop": route.next_hop_type,
+                        "type": "Microsoft.Network/routeTables/routes"
                     })
  
                     self.add_edge(rt.id, route_id, "HAS_ROUTE")
@@ -302,7 +326,7 @@ class TopologyBuilder:
         # =========================
         for lb in load_balancers:
         
-            self.add_node(lb.id, "LoadBalancer", lb.name)
+            self.add_node(lb.id, "LoadBalancer", lb.name, self.build_resource_properties(lb, "Microsoft.Network/loadBalancers"))
         
             # BACKEND POOL → NIC FIX
             try:
@@ -346,7 +370,7 @@ class TopologyBuilder:
         # =========================
         for nat in nat_gateways:
  
-            self.add_node(nat.id, "NATGateway", nat.name)
+            self.add_node(nat.id, "NATGateway", nat.name, self.build_resource_properties(nat, "Microsoft.Network/natGateways"))
  
             try:
                 if nat.subnets:
@@ -360,7 +384,13 @@ class TopologyBuilder:
         # =========================
         for db in databases:
         
-            self.add_node(db["id"], "Database", db["name"])
+            props = {
+                "type": db.get("type", "Database"),
+                "resource_group": db.get("resource_group", "Unknown"),
+                "location": db.get("location", "Unknown"),
+                "state": db.get("state", "Unknown")
+            }
+            self.add_node(db["id"], "Database", db["name"], props)
         
         # =========================
         # VM → DB (AUTO LINK SIMPLE LOGIC)

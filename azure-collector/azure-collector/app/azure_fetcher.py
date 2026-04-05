@@ -10,11 +10,48 @@ class AzureFetcher:
         self.compute_client = ComputeManagementClient(credential, SUBSCRIPTION_ID)
         self.network_client = NetworkManagementClient(credential, SUBSCRIPTION_ID)
  
+    def parse_resource_id(self, resource_id):
+        if not resource_id:
+            return {}
+        parts = resource_id.strip('/').split('/')
+        return {parts[i]: parts[i + 1] for i in range(0, len(parts) - 1, 2)}
+ 
+    def get_subnet(self, subnet_id):
+        info = self.parse_resource_id(subnet_id)
+        if not info:
+            return None
+        return self.network_client.subnets.get(
+            info.get('resourceGroups'),
+            info.get('virtualNetworks'),
+            info.get('subnets')
+        )
+ 
+    def get_route_table(self, route_table_id):
+        info = self.parse_resource_id(route_table_id)
+        if not info:
+            return None
+        return self.network_client.route_tables.get(
+            info.get('resourceGroups'),
+            info.get('routeTables')
+        )
+ 
     def get_topology(self):
  
         nodes = []
         edges = []
         node_map = {}
+
+        def build_resource_node(resource, label, type_hint):
+            info = self.parse_resource_id(getattr(resource, "id", ""))
+            return {
+                "id": getattr(resource, "id", None),
+                "name": getattr(resource, "name", None),
+                "label": label,
+                "resource_group": info.get("resourceGroups", "Unknown"),
+                "location": getattr(resource, "location", "Unknown"),
+                "state": getattr(resource, "provisioning_state", "Unknown") or "Unknown",
+                "type": getattr(resource, "type", type_hint)
+            }
  
         vms = list(self.compute_client.virtual_machines.list_all())
         nics = list(self.network_client.network_interfaces.list_all())
@@ -26,19 +63,11 @@ class AzureFetcher:
  
         # VM
         for vm in vms:
-            nodes.append({
-                "id": vm.id,
-                "name": vm.name,
-                "label": "VM"
-            })
+            nodes.append(build_resource_node(vm, "VM", "Microsoft.Compute/virtualMachines"))
  
         # NIC
         for nic in nics:
-            nodes.append({
-                "id": nic.id,
-                "name": nic.name,
-                "label": "NIC"
-            })
+            nodes.append(build_resource_node(nic, "NIC", "Microsoft.Network/networkInterfaces"))
  
         # NIC → SUBNET
         for nic in nics:
@@ -64,19 +93,20 @@ class AzureFetcher:
         # SUBNET nodes
         for vnet in vnets:
             for subnet in vnet.subnets:
+                subnet_info = self.parse_resource_id(subnet.id)
                 nodes.append({
                     "id": subnet.id,
                     "name": subnet.name,
-                    "label": "Subnet"
+                    "label": "Subnet",
+                    "resource_group": subnet_info.get("resourceGroups", "Unknown"),
+                    "location": vnet.location,
+                    "state": getattr(subnet, "provisioning_state", "Unknown") or "Unknown",
+                    "type": "Microsoft.Network/virtualNetworks/subnets"
                 })
  
         # NSG
         for nsg in nsgs:
-            nodes.append({
-                "id": nsg.id,
-                "name": nsg.name,
-                "label": "NSG"
-            })
+            nodes.append(build_resource_node(nsg, "NSG", "Microsoft.Network/networkSecurityGroups"))
  
             for rule in nsg.security_rules:
                 rule_id = f"{nsg.id}/rule/{rule.name}"
@@ -106,11 +136,7 @@ class AzureFetcher:
  
         # Public IP
         for pip in public_ips:
-            nodes.append({
-                "id": pip.id,
-                "name": pip.name,
-                "label": "PublicIP"
-            })
+            nodes.append(build_resource_node(pip, "PublicIP", "Microsoft.Network/publicIPAddresses"))
  
             if pip.ip_configuration:
                 ref = pip.ip_configuration.id
@@ -133,11 +159,7 @@ class AzureFetcher:
  
         # Load Balancer
         for lb in lbs:
-            nodes.append({
-                "id": lb.id,
-                "name": lb.name,
-                "label": "LoadBalancer"
-            })
+            nodes.append(build_resource_node(lb, "LoadBalancer", "Microsoft.Network/loadBalancers"))
  
             for pool in lb.backend_address_pools:
                 if pool.backend_ip_configurations:
@@ -152,27 +174,29 @@ class AzureFetcher:
  
         # Route Tables + Routes
         for rt in route_tables:
-            nodes.append({
-                "id": rt.id,
-                "name": rt.name,
-                "label": "RouteTable"
-            })
+            nodes.append(build_resource_node(rt, "RouteTable", "Microsoft.Network/routeTables"))
  
             if rt.subnets:
                 for subnet in rt.subnets:
                     edges.append({
-                        "source": subnet.id,
-                        "target": rt.id,
-                        "type": "USES_ROUTE_TABLE"
+                        "source": rt.id,
+                        "target": subnet.id,
+                        "type": "ASSOCIATED_WITH"
                     })
  
             if rt.routes:
                 for route in rt.routes:
                     route_id = f"{rt.id}/route/{route.name}"
+                    route_info = self.parse_resource_id(route_id)
  
                     nodes.append({
                         "id": route_id,
+                        "name": route.name,
                         "label": "Route",
+                        "resource_group": route_info.get("resourceGroups", "Unknown"),
+                        "location": getattr(rt, "location", "Unknown"),
+                        "state": "Unknown",
+                        "type": "Microsoft.Network/routeTables/routes",
                         "address_prefix": route.address_prefix,
                         "next_hop": str(route.next_hop_type)
                     })

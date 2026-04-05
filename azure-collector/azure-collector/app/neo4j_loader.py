@@ -21,15 +21,8 @@ class Neo4jLoader:
  
         self.compute_client = ComputeManagementClient(
             credential,
-            os.getenv("AZURE_SUBSCRIPTION_ID")
+            SUBSCRIPTION_ID
         )
- 
-    def close(self):
-        self.driver.close()
- 
-    # -----------------------------------------
-    # LOAD TOPOLOGY (YOUR EXISTING LOGIC)
-    # -----------------------------------------
     def load_topology(self, topology):
  
         with self.driver.session() as session:
@@ -98,19 +91,36 @@ class Neo4jLoader:
                     continue
  
                 location = vm.location
+                power_state = None
+ 
+                try:
+                    instance_view = self.compute_client.virtual_machines.instance_view(rg, vm_name)
+                    statuses = getattr(instance_view, "statuses", []) or []
+                    for status in statuses:
+                        code = getattr(status, "code", "")
+                        if isinstance(code, str) and code.lower().startswith("powerstate/"):
+                            power_state = code.split("/")[-1]
+                            break
+                except Exception:
+                    power_state = None
  
                 session.run("""
                 MATCH (v:VM {name:$name})
                 SET
                     v.resource_group = $rg,
-                    v.location = $location
+                    v.location = $location,
+                    v.power_state = $power_state
                 """, {
                     "name": vm_name,
                     "rg": rg,
-                    "location": location
+                    "location": location,
+                    "power_state": power_state
                 })
  
-        print("✅ VM metadata enriched (RG + location)")
+        print("✅ VM metadata enriched (RG + location + power_state)")
+ 
+    def close(self):
+        self.driver.close()
  
     # -----------------------------------------
     # INSERT METRICS

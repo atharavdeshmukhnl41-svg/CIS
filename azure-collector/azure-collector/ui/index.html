@@ -1,81 +1,190 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>CIP Dashboard</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud RCA Platform</title>
   <link rel="stylesheet" href="style.css">
- 
-  <!-- ✅ REQUIRED FOR GRAPH -->
+  <!-- Font Awesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <!-- Vis.js for graph visualization -->
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
- 
-<body>
- 
-<div class="header">
-  <h1>🚀 Cloud Intelligence Platform</h1>
-</div>
- 
-<!-- KPI -->
-<div class="kpi-container">
-  <div class="kpi" id="cpuCard">CPU: --</div>
-  <div class="kpi" id="netCard">Network: --</div>
-  <div class="kpi" id="statusCard">Status: --</div>
-</div>
- 
-<!-- CONTROLS -->
-<div class="controls">
-  <input id="vmName" placeholder="VM Name (CIP)">
-  <input id="port" placeholder="Port (22)">
-  <button onclick="runRCA()">Run RCA</button>
-</div>
- 
-<!-- RCA -->
-<div class="panel">
-  <h2>VM RCA</h2>
-  <pre id="rcaOutput"></pre>
-</div>
- 
-<!-- INCIDENT -->
-<div class="panel">
-  <h2>Incidents</h2>
-  <button onclick="loadIncidents()">Load Incidents</button>
-  <pre id="incidentOutput"></pre>
-</div>
- 
-<!-- ALERT -->
-<div class="panel">
-  <h2>Alerts</h2>
-  <button onclick="loadAlerts()">Load Alerts</button>
-  <pre id="alertOutput"></pre>
-</div>
- 
-<!-- ✅ TOPOLOGY -->
-<div class="panel">
-  <h2>Topology</h2>
-  <button onclick="loadTopology()">Load Topology</button>
-  <div id="graph" style="height:500px;background:#111;"></div>
-</div>
- 
-<!-- ✅ LOAD JS AT END -->
-<script src="app.js"></script>
-<script src="graph.js"></script>
 
-<div class="panel">
-  <h2>Approval Workflow</h2>
- 
-  <button onclick="requestFix('restart_vm')">Request VM Restart</button>
-  <button onclick="requestFix('fix_nsg')">Request NSG Fix</button>
- 
-  <br><br>
- 
-  <input id="approvalId" placeholder="Request ID to approve">
-  <button onclick="approveRequest()">Approve</button>
- 
-  <br><br>
- 
-  <button onclick="loadApprovals()">Refresh Requests</button>
- 
-  <pre id="approvalOutput"></pre>
-</div>
- 
+<body>
+  <!-- Top Bar -->
+  <header class="top-bar">
+    <div class="top-bar-left">
+      <h1 class="dashboard-title">
+        <i class="fas fa-cloud"></i>
+        Cloud RCA Platform
+      </h1>
+    </div>
+    <div class="top-bar-center">
+      <div class="control-group">
+        <label for="vmSelector">VM:</label>
+        <select id="vmSelector" class="control-select">
+          <option value="">Select VM...</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="portSelector">Port:</label>
+        <select id="portSelector" class="control-select">
+          <option value="22">22 (SSH)</option>
+          <option value="80">80 (HTTP)</option>
+          <option value="443">443 (HTTPS)</option>
+        </select>
+      </div>
+      <button id="runRcaBtn" class="btn-primary">
+        <i class="fas fa-search"></i>
+        Run RCA
+      </button>
+    </div>
+    <div class="top-bar-right">
+      <button id="refreshBtn" class="btn-secondary">
+        <i class="fas fa-sync-alt"></i>
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Dashboard -->
+  <main class="dashboard">
+    <!-- Left Panel - Topology Graph -->
+    <aside class="left-panel">
+      <div class="panel-card">
+        <div class="panel-header">
+          <h3><i class="fas fa-project-diagram"></i> Infrastructure Topology</h3>
+          <button id="loadTopologyBtn" class="btn-icon">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+        <div class="panel-content">
+          <!-- Topology Legend -->
+          <div class="topology-legend">
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #10b981;"></div>
+              <span>VM (Healthy)</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #ef4444;"></div>
+              <span>NSG/Firewall</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #3b82f6;"></div>
+              <span>Network Interface</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #8b5cf6;"></div>
+              <span>Load Balancer</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #ec4899;"></div>
+              <span>Route Table</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #06b6d4;"></div>
+              <span>Public IP</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-indicator">❌</div>
+              <span>Failing Component</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-indicator">⚠️</div>
+              <span>Warning Component</span>
+            </div>
+          </div>
+          <div id="topologyGraph" class="graph-container"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right Panel - Analysis Sections -->
+    <section class="right-panel">
+      <!-- RCA Panel -->
+      <div class="panel-card rca-panel">
+        <div class="panel-header">
+          <h3><i class="fas fa-search"></i> Root Cause Analysis</h3>
+        </div>
+        <div class="panel-content">
+          <div id="rcaPath" class="rca-path"></div>
+          <div id="rcaIssues" class="rca-issues"></div>
+          <div id="rcaRootCause" class="rca-root-cause"></div>
+          <div id="rcaImpact" class="rca-impact"></div>
+          <div id="rcaSuggestions" class="rca-suggestions"></div>
+          <div id="rcaConfidence" class="rca-confidence"></div>
+        </div>
+      </div>
+
+      <!-- Alerts Panel -->
+      <div class="panel-card alerts-panel">
+        <div class="panel-header">
+          <h3><i class="fas fa-bell"></i> Active Alerts</h3>
+          <button id="loadAlertsBtn" class="btn-icon">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+        <div class="panel-content">
+          <div id="alertsList" class="alerts-list"></div>
+        </div>
+      </div>
+
+      <!-- Incidents Panel -->
+      <div class="panel-card incidents-panel">
+        <div class="panel-header">
+          <h3><i class="fas fa-exclamation-triangle"></i> Active Incidents</h3>
+          <button id="loadIncidentsBtn" class="btn-icon">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+        <div class="panel-content">
+          <div id="incidentsList" class="incidents-list"></div>
+        </div>
+      </div>
+
+      <!-- Metrics Panel -->
+      <div class="panel-card metrics-panel">
+        <div class="panel-header">
+          <h3><i class="fas fa-chart-line"></i> System Metrics</h3>
+        </div>
+        <div class="panel-content">
+          <div class="metrics-grid">
+            <div class="metric-card" id="cpuMetric">
+              <div class="metric-icon">
+                <i class="fas fa-microchip"></i>
+              </div>
+              <div class="metric-content">
+                <div class="metric-value">--</div>
+                <div class="metric-label">CPU Usage</div>
+              </div>
+            </div>
+            <div class="metric-card" id="networkMetric">
+              <div class="metric-icon">
+                <i class="fas fa-network-wired"></i>
+              </div>
+              <div class="metric-content">
+                <div class="metric-value">--</div>
+                <div class="metric-label">Network I/O</div>
+              </div>
+            </div>
+            <div class="metric-card" id="statusMetric">
+              <div class="metric-icon">
+                <i class="fas fa-server"></i>
+              </div>
+              <div class="metric-content">
+                <div class="metric-value">--</div>
+                <div class="metric-label">VM Status</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- JavaScript -->
+  <script src="app.js"></script>
+  <script src="graph.js"></script>
 </body>
 </html>
